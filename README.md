@@ -1,84 +1,131 @@
 # faceCheck
 
-Laptop'ın kamerasıyla ekranın karşısındaki kişileri izler. Bilgisayarın sahibi ekranın başında değilken **yabancı biri tek başına ekrana bakarsa ekranı otomatik kapatır.** Uygulama Windows, macOS ve Linux'ta aynı kodla çalışır.
+An owner-aware screen guard for laptops. faceCheck watches the webcam and **blanks the screen when a stranger looks at it while you are not there.** It runs on Windows, macOS and Linux from the same code. It sits in the system tray and starts automatically when you log in.
 
-| Durum | Ekran |
+| Situation | Screen |
 |---|---|
-| Sahip kadrajda (yanında başkaları olsa da) | **Açık** |
-| Sadece yabancı(lar) ekrana bakıyor | **~1,5 sn sonra kapanır** |
-| Yabancı var ama ekrana bakmıyor / uzakta | Açık |
-| Kimse yok | Açık (isteğe bağlı: `--absent-delay 30`) |
-| Sahip geri döndü | Otomatik açılır (`overlay` / `off` modları) |
+| You (the owner) are in front of it, even with other people around | **On** |
+| Only stranger(s) are looking at it | **Blanked after ~1.5 s** |
+| A stranger is around but not looking, or is far away | On |
+| Nobody is there | On (optional: `--absent-delay 30`) |
+| You come back | Restored automatically (`overlay` / `off` modes) |
 
-Yüz bulma için OpenCV **YuNet**, yüz tanıma için **SFace** kullanılır (ONNX). dlib veya GPU gerekmez. Modeller ilk çalıştırmada `~/.screenguard/models` klasörüne otomatik iner. Tüm işlem yerelde yapılır, görüntü hiçbir yere gönderilmez.
+Face detection uses OpenCV **YuNet** and face recognition uses **SFace** (ONNX models). No dlib and no GPU needed. The models are downloaded on first run to `~/.screenguard/models`. Everything runs locally; no image ever leaves your computer.
 
-## Kurulum
+## Install
 
 ```bash
+git clone https://github.com/Sundist/faceCheck.git
+cd faceCheck
 pip install -r requirements.txt
 ```
 
-Linux'ta tkinter yoksa: `sudo apt install python3-tk`
+Linux extras: `sudo apt install python3-tk`. For a tray icon on GNOME you also need the *AppIndicator* extension (`sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi`, then `pip install PyGObject`).
 
-## 1) Sahibi kaydet
-
-```bash
-python screenguard.py enroll
-```
-
-Kameraya bakın. Ekranda yazan yönlere başınızı hafifçe çevirin. Program 20 örnek alır. Farklı bir ışıkta ya da gözlükle tekrar eklemek için:
+## Quick start (tray app, recommended)
 
 ```bash
-python screenguard.py enroll --append
+python tray.py
 ```
 
-## 2) Korumayı başlat
+On first launch faceCheck:
+
+1. Registers itself to **start at login** (Windows Run key, macOS LaunchAgent, Linux `~/.config/autostart`).
+2. Opens the camera to **enroll your face**. Look at the camera and follow the prompts; 20 samples are taken.
+3. Shows an icon in the tray (Windows taskbar, macOS menu bar, Linux panel) and starts guarding.
+
+From then on it starts by itself every time you log in and stops when you shut down.
+
+### Tray icon
+
+| Color | Meaning |
+|---|---|
+| 🟢 green | Protected (you are recognized or nobody suspicious) |
+| 🔴 red | Screen blanked: a stranger is looking |
+| 🟡 yellow | Paused (camera off) |
+| 🔵 blue | Enrolling your face |
+| ⚪ grey | Starting or error (see *Open log*) |
+
+The menu (right-click; on Windows a left-click toggles pause) offers:
+
+- **Pause / Resume**, **Pause for 15 minutes**, **Pause for 1 hour**. The camera is released while paused.
+- **When a stranger looks**: *Black overlay*, *Lock the computer*, or *Turn the display off*.
+- **Camera preview**: shows boxes and match scores, useful for tuning.
+- **Enroll my face** / **Add more face samples** (e.g. with glasses or in different lighting).
+- **Start at login** (checkbox).
+- **Edit settings…**, **Reload settings**, **Open log**, **Quit faceCheck**.
+
+The tray app supervises the guard in a separate process and restarts it if it crashes. If the tray app is killed, the guard exits too and the screen is never left blanked.
+
+### Autostart from the command line
 
 ```bash
-python screenguard.py run --preview
+python tray.py --enable-autostart
+python tray.py --disable-autostart
 ```
 
-İlk seferde `--preview` ile deneyip skorlara bakın. Yeşil kutu sahip, kırmızı kutu ekrana bakan yabancı, turuncu kutu bakmayan yabancı demektir. Ayar tamamsa önizlemesiz çalıştırın:
+The autostart entry stores the absolute path of the current Python interpreter and of `tray.py`. If you move the folder or change your Python/virtualenv, run `--enable-autostart` again. On Windows it uses `pythonw.exe` so no console window appears.
 
-```bash
-python screenguard.py run
-```
+## Settings
 
-### Modlar
+`~/.screenguard/config.json` (menu: *Edit settings…*, then *Reload settings*):
 
-| `--mode` | Ne yapar | Geri açılma |
+| Key | Default | Description |
 |---|---|---|
-| `overlay` (varsayılan) | Tüm ekranı kaplayan siyah perde | Sahip görününce otomatik |
-| `lock` | İşletim sisteminin kilit ekranı | Şifre ile (en güvenli) |
-| `off` | Monitörü kapatır (Win: SC_MONITORPOWER, macOS: pmset, Linux/X11: xset dpms) | Sahip görününce otomatik |
+| `mode` | `overlay` | `overlay` = black curtain, auto-restores · `lock` = OS lock screen (most secure) · `off` = display power off |
+| `threshold` | `0.40` | Owner match threshold. Lower it (0.36) if you are not recognized; raise it (0.45–0.5) if strangers are accepted. |
+| `stranger_delay` | `1.5` | Seconds a lone stranger may look before blanking |
+| `absent_delay` | `0` | Blank after N seconds with nobody there (0 = disabled) |
+| `camera` | `0` | Camera index |
+| `pin` | `""` | Overlay mode: type this PIN + Enter to lift the curtain for 60 s |
+| `preview` | `false` | Show the camera preview window |
 
-### Önemli ayarlar
+Files in `~/.screenguard/`: `owner.npz` (your face embeddings, no images), `config.json`, `facecheck.log`, `models/`.
 
-| Parametre | Varsayılan | Açıklama |
-|---|---|---|
-| `--threshold` | 0.40 | Sahip eşleşme eşiği. Sizi tanımıyorsa düşürün (0.36), yabancıyı sahip sanıyorsa yükseltin (0.45–0.5). |
-| `--stranger-delay` | 1.5 | Yabancı kaç saniye bakınca kapansın |
-| `--owner-grace` | 2.0 | Sahip kadrajdan çıkınca kaç saniye daha "var" sayılsın |
-| `--absent-delay` | 0 | Kimse yoksa kapanma süresi (0 = kapalı) |
-| `--min-face` | 0.08 | Uzaktaki yüzleri yok say (yüz genişliği / görüntü genişliği) |
-| `--pin 1234` | – | `overlay` modunda perde açıkken PIN + Enter ile 60 sn aç |
-| `--camera 1` | 0 | Başka bir kamera |
+## Command line (without the tray)
 
-## Açılışta otomatik başlatma
+```bash
+python screenguard.py enroll                 # register your face
+python screenguard.py enroll --append        # add more samples
+python screenguard.py run --preview          # guard with a preview window
+python screenguard.py run --mode lock        # lock the OS instead of an overlay
+python screenguard.py run --help             # all options
+```
 
-- **Windows:** `Win+R` → `shell:startup` klasörüne `pythonw C:\yol\screenguard.py run` çalıştıran bir kısayol koyun.
-- **macOS:** Sistem Ayarları → Genel → Giriş Öğeleri'ne ekleyin ya da bir LaunchAgent yazın. İlk çalıştırmada kamera izni verin.
-- **Linux:** `~/.config/autostart/` içine bir `.desktop` dosyası koyun.
+Preview colors: green = owner, red = stranger looking at the screen, orange = stranger not looking.
 
-## Sınırlamalar
+## How it works
 
-- Basılı fotoğraf veya ekrandaki bir video ile kandırılabilir (canlılık testi yok). Gerçek güvenlik için `--mode lock` kullanın.
-- `overlay` yalnızca görsel bir perdedir; klavye kilidi değildir. Linux'ta Wayland oturumlarında `xset` çalışmaz, `overlay` ya da `lock` modunu kullanın.
-- Karanlık ortamda tespit zayıflar.
+1. Every frame (~8 fps), YuNet finds faces and their landmarks.
+2. Each face is embedded with SFace and compared (cosine similarity) with your enrolled samples.
+3. A face counts as *looking at the screen* when its nose is near the midpoint between the eyes and the face is large enough (not in the background).
+4. A small state machine decides:
+   - owner seen within the last `owner_grace` seconds → show,
+   - a non-owner looking for `stranger_delay` seconds → blank,
+   - nobody for `absent_delay` seconds → blank (if enabled).
+   Restoring requires two consecutive owner matches to avoid flicker.
 
-## Test
+## Limitations
+
+- No liveness check: a printed photo or a video of you could fool it. Use `mode: lock` if you need real security.
+- `overlay` is a visual curtain, not an input lock; the keyboard still works behind it.
+- `off` mode on Linux needs X11 (`xset`); on Wayland use `overlay` or `lock`.
+- On macOS, grant camera access to the Python/Terminal app on first run. The `lock` / `off` modes use `pmset displaysleepnow`; enable *Require password immediately* for a real lock.
+- Detection gets worse in the dark.
+
+## Development
 
 ```bash
 pip install pytest
 python -m pytest -q tests
+```
+
+The tests cover the decision logic, the guard's IPC protocol (with a fake camera), and the tray supervisor (launch, pause, crash restart, autostart).
+
+## Project layout
+
+```
+screenguard.py   face detection/recognition, decision logic, screen actions, CLI
+tray.py          tray icon + menu, guard supervisor, start-at-login integration
+tests/           pytest suite
 ```
